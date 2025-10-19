@@ -22,12 +22,12 @@ export default {
     const editorContainer = ref(null);
     let editor = null;
 
-    // Internal variable to store current JSON value
+    // Internal variable to store current JSON value (output variable)
     const { value: currentValue, setValue: setCurrentValue } = wwLib.wwVariable.useComponentVariable({
       uid: props.uid,
-      name: 'value',
+      name: 'json',
       type: 'object',
-      defaultValue: {},
+      defaultValue: props.content?.initialValue || {},
     });
 
     // Computed style for wrapper
@@ -96,6 +96,7 @@ export default {
                 if (updatedContent?.json !== undefined) {
                   const newValue = updatedContent.json;
                   setCurrentValue(newValue);
+                  console.log('JSON Editor value changed:', newValue);
                   emit('trigger-event', {
                     name: 'change',
                     event: { value: newValue },
@@ -119,8 +120,10 @@ export default {
           },
         });
 
-        // Set initial value in internal variable
+        // Set initial value in output variable
         setCurrentValue(initialContent);
+
+        console.log('JSON Editor initialized with value:', initialContent);
 
         // Add global event listeners with a slight delay to prevent immediate trigger
         setTimeout(() => {
@@ -227,34 +230,205 @@ export default {
   height: 100%;
   position: relative;
   overflow: visible !important;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e5e7eb;
 
   .editor-container {
     width: 100%;
     height: 100%;
     min-height: 200px;
     overflow: visible;
+    border-radius: 12px;
   }
 
-  // Ensure popups and menus can appear above other elements
+  // Modern styling for the JSON editor
+  :deep(.jse-main) {
+    position: relative;
+    overflow: visible;
+    border-radius: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    border: none !important;
+  }
+
+  // Menu bar styling
+  :deep(.jse-menu) {
+    background: #f9fafb !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    padding: 8px 12px !important;
+    border-radius: 12px 12px 0 0 !important;
+  }
+
+  :deep(.jse-button) {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 6px 12px !important;
+    color: #374151 !important;
+    font-weight: 500 !important;
+    transition: all 0.2s ease !important;
+    font-size: 13px !important;
+
+    &:hover {
+      background: #e5e7eb !important;
+      transform: translateY(-1px);
+    }
+
+    &:active {
+      transform: translateY(0);
+    }
+  }
+
+  // Content area
+  :deep(.jse-contents) {
+    background: #ffffff !important;
+    border-radius: 0 0 12px 12px !important;
+  }
+
+  // Tree view styling
+  :deep(.jse-tree-mode) {
+    background: #ffffff !important;
+  }
+
+  :deep(.jse-value),
+  :deep(.jse-key) {
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace !important;
+    font-size: 13px !important;
+  }
+
+  :deep(.jse-key) {
+    color: #3b82f6 !important;
+    font-weight: 500 !important;
+  }
+
+  :deep(.jse-value.jse-string) {
+    color: #059669 !important;
+  }
+
+  :deep(.jse-value.jse-number) {
+    color: #dc2626 !important;
+  }
+
+  :deep(.jse-value.jse-boolean) {
+    color: #7c3aed !important;
+  }
+
+  :deep(.jse-value.jse-null) {
+    color: #6b7280 !important;
+  }
+
+  // Search box styling
+  :deep(.jse-search) {
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 6px 12px !important;
+    transition: all 0.2s ease !important;
+
+    &:focus {
+      outline: none !important;
+      border-color: #3b82f6 !important;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+    }
+  }
+
+  // Status bar
+  :deep(.jse-status-bar) {
+    background: #f9fafb !important;
+    border-top: 1px solid #e5e7eb !important;
+    padding: 8px 12px !important;
+    color: #6b7280 !important;
+    font-size: 12px !important;
+    border-radius: 0 0 12px 12px !important;
+  }
+
+  // Navigation bar
+  :deep(.jse-navigation-bar) {
+    background: #f9fafb !important;
+    border-bottom: 1px solid #e5e7eb !important;
+    padding: 8px 12px !important;
+  }
+
+  // Modals and popups
   :deep(.jse-modal),
   :deep(.jse-contextmenu),
   :deep(.jse-popup),
   :deep(.jse-modal-overlay) {
     z-index: 9999 !important;
     pointer-events: auto !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
   }
 
-  // Fix for menu positioning
-  :deep(.jse-main) {
-    position: relative;
-    overflow: visible;
+  :deep(.jse-modal-overlay) {
+    background: rgba(0, 0, 0, 0.4) !important;
+    backdrop-filter: blur(4px);
   }
 
-  // Ensure menu buttons work
-  :deep(.jse-contextmenu button),
+  :deep(.jse-modal) {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+  }
+
+  :deep(.jse-contextmenu) {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    padding: 4px !important;
+  }
+
+  :deep(.jse-contextmenu button) {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    border-radius: 4px !important;
+    padding: 8px 12px !important;
+    transition: all 0.2s ease !important;
+
+    &:hover {
+      background: #f3f4f6 !important;
+    }
+  }
+
   :deep(.jse-popup button) {
     pointer-events: auto !important;
-    cursor: pointer;
+    cursor: pointer !important;
+  }
+
+  // Input fields
+  :deep(input[type="text"]),
+  :deep(textarea) {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 6px !important;
+    padding: 8px 12px !important;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace !important;
+    transition: all 0.2s ease !important;
+
+    &:focus {
+      outline: none !important;
+      border-color: #3b82f6 !important;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+    }
+  }
+
+  // Scrollbar styling
+  :deep(*::-webkit-scrollbar) {
+    width: 8px;
+    height: 8px;
+  }
+
+  :deep(*::-webkit-scrollbar-track) {
+    background: #f3f4f6;
+    border-radius: 4px;
+  }
+
+  :deep(*::-webkit-scrollbar-thumb) {
+    background: #d1d5db;
+    border-radius: 4px;
+    transition: background 0.2s ease;
+
+    &:hover {
+      background: #9ca3af;
+    }
   }
 }
 

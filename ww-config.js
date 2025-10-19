@@ -132,21 +132,6 @@ export default {
       defaultValue: "400px",
       bindable: true,
     },
-    darkTheme: {
-      label: {
-        en: "Dark Theme",
-      },
-      type: "OnOff",
-      section: "style",
-      defaultValue: false,
-      bindable: true,
-      /* wwEditor:start */
-      bindingValidation: {
-        type: "boolean",
-        tooltip: "Use dark theme",
-      },
-      /* wwEditor:end */
-    },
   },
   triggerEvents: [
     {

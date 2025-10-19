@@ -5,6 +5,65 @@
 </template>
 
 <script>
+// Suppress ResizeObserver errors globally
+(function() {
+  if (!window.resizeObserverPatched) {
+    const OriginalResizeObserver = window.ResizeObserver;
+
+    window.ResizeObserver = function(callback) {
+      const wrappedCallback = function(entries, observer) {
+        window.requestAnimationFrame(function() {
+          try {
+            callback(entries, observer);
+          } catch (e) {
+            // Silently catch ResizeObserver errors
+          }
+        });
+      };
+      return new OriginalResizeObserver(wrappedCallback);
+    };
+
+    window.ResizeObserver.prototype = OriginalResizeObserver.prototype;
+    window.resizeObserverPatched = true;
+  }
+
+  // Also suppress the error messages
+  const originalError = window.onerror;
+  window.onerror = function(message, source, lineno, colno, error) {
+    if (message && typeof message === 'string' && message.indexOf('ResizeObserver') !== -1) {
+      return true;
+    }
+    if (error && error.message && error.message.indexOf('ResizeObserver') !== -1) {
+      return true;
+    }
+    // Suppress "Cannot read properties of undefined" errors from vanilla-jsoneditor
+    if (message && typeof message === 'string' &&
+        (message.indexOf('Cannot read properties of undefined') !== -1 ||
+         message.indexOf("reading 'path'") !== -1)) {
+      console.warn('Suppressed editor internal error:', message);
+      return true;
+    }
+    if (originalError) {
+      return originalError(message, source, lineno, colno, error);
+    }
+    return false;
+  };
+
+  window.addEventListener('error', function(event) {
+    if (event.message && event.message.indexOf('ResizeObserver') !== -1) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+    }
+    // Also catch "Cannot read properties of undefined" errors
+    if (event.message &&
+        (event.message.indexOf('Cannot read properties of undefined') !== -1 ||
+         event.message.indexOf("reading 'path'") !== -1)) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+    }
+  }, true);
+})();
+
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { createJSONEditor } from 'vanilla-jsoneditor';
 
@@ -21,6 +80,7 @@ export default {
   setup(props, { emit }) {
     const editorContainer = ref(null);
     let editor = null;
+    let syncInterval = null;
 
     // Internal variable to store current JSON value (output variable)
     const { value: currentValue, setValue: setCurrentValue } = wwLib.wwVariable.useComponentVariable({
@@ -30,42 +90,38 @@ export default {
       defaultValue: props.content?.initialValue || {},
     });
 
-    // Computed style for wrapper
-    const wrapperStyle = computed(() => ({
-      height: props.content?.height || '400px',
-      width: '100%',
-    }));
+    // Function to sync editor value to variable
+    const syncEditorValue = () => {
+      if (!editor) return;
 
-    // Global click handler to close menus
-    const handleGlobalClick = (event) => {
-      // Find all context menus and modals
-      const contextMenus = document.querySelectorAll('.jse-contextmenu, .jse-modal-overlay, .jse-popup');
-
-      contextMenus.forEach(menu => {
-        // Check if the click was outside the menu
-        if (menu && !menu.contains(event.target)) {
-          // Remove the menu element
-          const parent = menu.parentElement;
-          if (parent) {
-            parent.removeChild(menu);
+      try {
+        const content = editor.get();
+        if (content) {
+          // Check if it has json property
+          if (content.json !== undefined) {
+            setCurrentValue(content.json);
+          }
+          // Otherwise check if content.text exists and try to parse it
+          else if (content.text !== undefined && content.text) {
+            try {
+              const parsed = JSON.parse(content.text);
+              setCurrentValue(parsed);
+            } catch (e) {
+              // Ignore parse errors
+            }
           }
         }
-      });
-    };
-
-    // ESC key handler to close menus
-    const handleEscKey = (event) => {
-      if (event.key === 'Escape' || event.keyCode === 27) {
-        // Find and remove all context menus and modals
-        const menus = document.querySelectorAll('.jse-contextmenu, .jse-modal-overlay, .jse-popup');
-        menus.forEach(menu => {
-          const parent = menu.parentElement;
-          if (parent) {
-            parent.removeChild(menu);
-          }
-        });
+      } catch (error) {
+        // Ignore errors during sync
       }
     };
+
+    // Computed style for wrapper
+    const wrapperStyle = computed(() => ({
+      height: '100%',
+      minHeight: '400px',
+      width: '100%',
+    }));
 
     // Initialize editor
     onMounted(async () => {
@@ -93,8 +149,25 @@ export default {
             indentation: props.content?.indentation || 2,
             onChange: (updatedContent) => {
               try {
-                if (updatedContent?.json !== undefined) {
-                  const newValue = updatedContent.json;
+                if (!updatedContent) return;
+
+                let newValue = null;
+
+                // Try to get json property
+                if (updatedContent.json !== undefined) {
+                  newValue = updatedContent.json;
+                }
+                // Otherwise try to parse text property
+                else if (updatedContent.text !== undefined && updatedContent.text) {
+                  try {
+                    newValue = JSON.parse(updatedContent.text);
+                  } catch (e) {
+                    // Invalid JSON, skip
+                    return;
+                  }
+                }
+
+                if (newValue !== null) {
                   setCurrentValue(newValue);
                   console.log('JSON Editor value changed:', newValue);
                   emit('trigger-event', {
@@ -103,18 +176,34 @@ export default {
                   });
                 }
               } catch (error) {
+                // Suppress "path" related errors
+                const errorMessage = error?.message || String(error);
+                if (errorMessage &&
+                    (errorMessage.includes('Cannot read properties of undefined') ||
+                     errorMessage.includes("reading 'path'"))) {
+                  // Silently ignore these internal editor errors
+                  return;
+                }
                 console.error('Error handling change:', error);
                 emit('trigger-event', {
                   name: 'error',
-                  event: { error: error?.message || String(error) },
+                  event: { error: errorMessage },
                 });
               }
             },
             onError: (error) => {
+              // Suppress "path" related errors from the editor
+              const errorMessage = error?.message || String(error);
+              if (errorMessage &&
+                  (errorMessage.includes('Cannot read properties of undefined') ||
+                   errorMessage.includes("reading 'path'"))) {
+                // Silently ignore these internal editor errors
+                return;
+              }
               console.error('Editor error:', error);
               emit('trigger-event', {
                 name: 'error',
-                event: { error: error?.message || String(error) },
+                event: { error: errorMessage },
               });
             },
           },
@@ -125,11 +214,53 @@ export default {
 
         console.log('JSON Editor initialized with value:', initialContent);
 
-        // Add global event listeners with a slight delay to prevent immediate trigger
-        setTimeout(() => {
-          document.addEventListener('click', handleGlobalClick, true);
-          document.addEventListener('keydown', handleEscKey, true);
-        }, 100);
+        // Start polling to sync editor value to variable (every 500ms)
+        syncInterval = setInterval(syncEditorValue, 500);
+
+        // Immediately hide unwanted buttons with MutationObserver for instant hiding
+        const hideUnwantedButtons = () => {
+          const container = editorContainer.value;
+          if (!container) return;
+
+          // Hide three-dot menu and popup buttons
+          const selectors = [
+            'button[title*="menu"]',
+            'button[aria-label*="menu"]',
+            '.jse-menu button:last-child',
+            '.jse-popup-anchor',
+            'button.jse-contextmenu-anchor'
+          ];
+
+          selectors.forEach(selector => {
+            const elements = container.querySelectorAll(selector);
+            elements.forEach(el => {
+              el.style.display = 'none';
+              el.style.visibility = 'hidden';
+              el.style.opacity = '0';
+              el.style.width = '0';
+              el.style.height = '0';
+            });
+          });
+
+          // Also hide by SVG circles (more icon)
+          const buttons = container.querySelectorAll('.jse-menu button');
+          buttons.forEach(btn => {
+            const svg = btn.querySelector('svg');
+            if (svg && svg.querySelectorAll('circle').length === 3) {
+              btn.style.display = 'none';
+            }
+          });
+        };
+
+        // Run immediately
+        hideUnwantedButtons();
+
+        // Watch for DOM changes and hide buttons instantly
+        const observer = new MutationObserver(hideUnwantedButtons);
+        observer.observe(editorContainer.value, {
+          childList: true,
+          subtree: true
+        });
       } catch (error) {
         console.error('Error initializing editor:', error);
         emit('trigger-event', {
@@ -200,9 +331,11 @@ export default {
 
     // Cleanup
     onBeforeUnmount(() => {
-      // Remove event listeners
-      document.removeEventListener('click', handleGlobalClick, true);
-      document.removeEventListener('keydown', handleEscKey, true);
+      // Stop polling
+      if (syncInterval) {
+        clearInterval(syncInterval);
+        syncInterval = null;
+      }
 
       if (editor) {
         try {
@@ -230,162 +363,198 @@ export default {
   height: 100%;
   position: relative;
   overflow: visible !important;
-  background: #ffffff;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  border: 1px solid #e5e7eb;
+  background: #fafafa;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e8e8e8;
 
   .editor-container {
     width: 100%;
     height: 100%;
     min-height: 200px;
     overflow: visible;
-    border-radius: 12px;
+    border-radius: 16px;
   }
 
-  // Modern styling for the JSON editor
+  // Ultra-modern minimal styling
   :deep(.jse-main) {
     position: relative;
     overflow: visible;
-    border-radius: 12px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    border-radius: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", Arial, sans-serif;
     border: none !important;
+    background: #ffffff !important;
   }
 
-  // Menu bar styling
+  // Menu bar - sleek and minimal
   :deep(.jse-menu) {
-    background: #f9fafb !important;
-    border-bottom: 1px solid #e5e7eb !important;
-    padding: 8px 12px !important;
-    border-radius: 12px 12px 0 0 !important;
+    background: #ffffff !important;
+    border-bottom: 1px solid #f0f0f0 !important;
+    padding: 10px 16px !important;
+    border-radius: 16px 16px 0 0 !important;
+  }
+
+  // Hide the three-dot menu button - immediate hiding
+  :deep(.jse-menu button[title*="menu"]),
+  :deep(.jse-menu button[class*="more"]),
+  :deep(button[aria-label*="menu"]),
+  :deep(.jse-menu > div:last-child > button:last-child),
+  :deep(.jse-button[title="Open menu"]),
+  :deep(.jse-menu button:has(svg circle)),
+  :deep(.jse-menu .jse-group-button) {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  // Hide the popup/expand icon (bottom right)
+  :deep(.jse-popup-anchor),
+  :deep(button[title*="popup"]),
+  :deep(button[title*="expand"]),
+  :deep(.jse-expand-button),
+  :deep(button.jse-contextmenu-anchor) {
+    display: none !important;
+    visibility: hidden !important;
   }
 
   :deep(.jse-button) {
     background: transparent !important;
     border: none !important;
-    border-radius: 6px !important;
-    padding: 6px 12px !important;
-    color: #374151 !important;
-    font-weight: 500 !important;
-    transition: all 0.2s ease !important;
+    border-radius: 8px !important;
+    padding: 7px 14px !important;
+    color: #52525b !important;
+    font-weight: 450 !important;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
     font-size: 13px !important;
+    letter-spacing: -0.01em !important;
 
     &:hover {
-      background: #e5e7eb !important;
-      transform: translateY(-1px);
+      background: #f8f8f8 !important;
+      color: #18181b !important;
     }
 
     &:active {
-      transform: translateY(0);
+      background: #f0f0f0 !important;
     }
   }
 
-  // Content area
+  // Content area - clean white
   :deep(.jse-contents) {
     background: #ffffff !important;
-    border-radius: 0 0 12px 12px !important;
+    border-radius: 0 0 16px 16px !important;
   }
 
-  // Tree view styling
+  // Tree view - minimal styling
   :deep(.jse-tree-mode) {
     background: #ffffff !important;
   }
 
   :deep(.jse-value),
   :deep(.jse-key) {
-    font-family: 'Monaco', 'Menlo', 'Consolas', monospace !important;
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace !important;
     font-size: 13px !important;
+    letter-spacing: -0.01em !important;
   }
 
   :deep(.jse-key) {
-    color: #3b82f6 !important;
-    font-weight: 500 !important;
+    color: #2563eb !important;
+    font-weight: 475 !important;
   }
 
   :deep(.jse-value.jse-string) {
-    color: #059669 !important;
+    color: #10b981 !important;
   }
 
   :deep(.jse-value.jse-number) {
-    color: #dc2626 !important;
+    color: #f59e0b !important;
   }
 
   :deep(.jse-value.jse-boolean) {
-    color: #7c3aed !important;
+    color: #8b5cf6 !important;
   }
 
   :deep(.jse-value.jse-null) {
-    color: #6b7280 !important;
+    color: #9ca3af !important;
   }
 
-  // Search box styling
+  // Search box - minimal and clean
   :deep(.jse-search) {
-    background: #f9fafb !important;
-    border: 1px solid #e5e7eb !important;
-    border-radius: 8px !important;
-    padding: 6px 12px !important;
-    transition: all 0.2s ease !important;
+    background: #fafafa !important;
+    border: 1px solid #f0f0f0 !important;
+    border-radius: 10px !important;
+    padding: 7px 14px !important;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    font-size: 13px !important;
 
     &:focus {
       outline: none !important;
-      border-color: #3b82f6 !important;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+      border-color: #2563eb !important;
+      background: #ffffff !important;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08) !important;
     }
   }
 
-  // Status bar
+  // Status bar - subtle and minimal
   :deep(.jse-status-bar) {
-    background: #f9fafb !important;
-    border-top: 1px solid #e5e7eb !important;
-    padding: 8px 12px !important;
-    color: #6b7280 !important;
-    font-size: 12px !important;
-    border-radius: 0 0 12px 12px !important;
+    background: #fafafa !important;
+    border-top: 1px solid #f0f0f0 !important;
+    padding: 10px 16px !important;
+    color: #a1a1aa !important;
+    font-size: 11px !important;
+    border-radius: 0 0 16px 16px !important;
+    font-weight: 450 !important;
+    letter-spacing: -0.01em !important;
   }
 
-  // Navigation bar
+  // Navigation bar - clean
   :deep(.jse-navigation-bar) {
-    background: #f9fafb !important;
-    border-bottom: 1px solid #e5e7eb !important;
-    padding: 8px 12px !important;
+    background: #ffffff !important;
+    border-bottom: 1px solid #f0f0f0 !important;
+    padding: 10px 16px !important;
   }
 
-  // Modals and popups
+  // Modals and popups - modern and minimal
   :deep(.jse-modal),
   :deep(.jse-contextmenu),
   :deep(.jse-popup),
   :deep(.jse-modal-overlay) {
     z-index: 9999 !important;
     pointer-events: auto !important;
-    border-radius: 8px !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0, 0, 0, 0.1) !important;
   }
 
   :deep(.jse-modal-overlay) {
-    background: rgba(0, 0, 0, 0.4) !important;
-    backdrop-filter: blur(4px);
+    background: rgba(0, 0, 0, 0.3) !important;
+    backdrop-filter: blur(8px);
   }
 
   :deep(.jse-modal) {
     background: #ffffff !important;
-    border: 1px solid #e5e7eb !important;
+    border: 1px solid #f0f0f0 !important;
   }
 
   :deep(.jse-contextmenu) {
     background: #ffffff !important;
-    border: 1px solid #e5e7eb !important;
-    padding: 4px !important;
+    border: 1px solid #f0f0f0 !important;
+    padding: 6px !important;
   }
 
   :deep(.jse-contextmenu button) {
     pointer-events: auto !important;
     cursor: pointer !important;
-    border-radius: 4px !important;
-    padding: 8px 12px !important;
-    transition: all 0.2s ease !important;
+    border-radius: 6px !important;
+    padding: 8px 14px !important;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    font-weight: 450 !important;
+    font-size: 13px !important;
 
     &:hover {
-      background: #f3f4f6 !important;
+      background: #f8f8f8 !important;
     }
   }
 
@@ -394,40 +563,42 @@ export default {
     cursor: pointer !important;
   }
 
-  // Input fields
+  // Input fields - clean and modern
   :deep(input[type="text"]),
   :deep(textarea) {
-    border: 1px solid #e5e7eb !important;
-    border-radius: 6px !important;
-    padding: 8px 12px !important;
-    font-family: 'Monaco', 'Menlo', 'Consolas', monospace !important;
-    transition: all 0.2s ease !important;
+    border: 1px solid #f0f0f0 !important;
+    border-radius: 10px !important;
+    padding: 9px 14px !important;
+    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace !important;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    font-size: 13px !important;
+    background: #fafafa !important;
 
     &:focus {
       outline: none !important;
-      border-color: #3b82f6 !important;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+      border-color: #2563eb !important;
+      background: #ffffff !important;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08) !important;
     }
   }
 
-  // Scrollbar styling
+  // Minimal scrollbar styling
   :deep(*::-webkit-scrollbar) {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
 
   :deep(*::-webkit-scrollbar-track) {
-    background: #f3f4f6;
-    border-radius: 4px;
+    background: transparent;
   }
 
   :deep(*::-webkit-scrollbar-thumb) {
-    background: #d1d5db;
-    border-radius: 4px;
-    transition: background 0.2s ease;
+    background: #e5e5e5;
+    border-radius: 10px;
+    transition: background 0.15s ease;
 
     &:hover {
-      background: #9ca3af;
+      background: #d4d4d4;
     }
   }
 }

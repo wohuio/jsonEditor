@@ -3,6 +3,7 @@ export default {
     label: {
       en: "JSON Editor",
     },
+    icon: "fontawesome/solid/code",
   },
   properties: {
     initialValue: {
@@ -122,15 +123,6 @@ export default {
         tooltip: "Number of spaces for indentation",
       },
       /* wwEditor:end */
-    },
-    height: {
-      label: {
-        en: "Editor Height",
-      },
-      type: "Length",
-      section: "style",
-      defaultValue: "400px",
-      bindable: true,
     },
   },
   triggerEvents: [

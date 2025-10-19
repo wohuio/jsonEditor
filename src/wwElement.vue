@@ -90,25 +90,32 @@ export default {
       defaultValue: props.content?.initialValue || {},
     });
 
-    // Function to sync editor value to variable
+    // Function to sync editor value to variable (only if changed)
     const syncEditorValue = () => {
       if (!editor) return;
 
       try {
         const content = editor.get();
         if (content) {
+          let newValue = null;
+
           // Check if it has json property
           if (content.json !== undefined) {
-            setCurrentValue(content.json);
+            newValue = content.json;
           }
           // Otherwise check if content.text exists and try to parse it
           else if (content.text !== undefined && content.text) {
             try {
-              const parsed = JSON.parse(content.text);
-              setCurrentValue(parsed);
+              newValue = JSON.parse(content.text);
             } catch (e) {
               // Ignore parse errors
+              return;
             }
+          }
+
+          // Only update if value has actually changed
+          if (newValue !== null && JSON.stringify(newValue) !== JSON.stringify(currentValue.value)) {
+            setCurrentValue(newValue);
           }
         }
       } catch (error) {
